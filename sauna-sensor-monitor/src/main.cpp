@@ -26,7 +26,7 @@ char pass[] = WIFI_PASS;
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1  // Some boards use reset pin, -1 if not used
-#define SCREEN_ADDRESS 0x3C  // Most SSD1306 I2C displays use 0x3C
+#define SCREEN_ADDRESS 0x70  // Most SSD1306 I2C displays use 0x3C
 
 // Initialize OLED display
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);

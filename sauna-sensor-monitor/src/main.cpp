@@ -1,4 +1,9 @@
 #include <Arduino.h>
+
+#include "secrets.h"
+#include <gpio_viewer.h>
+
+
 #include <Wire.h>
 #include <SHTSensor.h>
 #include <Adafruit_I2CDevice.h>
@@ -7,16 +12,20 @@
 #include <Adafruit_GFX.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include "secrets.h"
 
-#include <FS.h>
-#include <SPIFFS.h>
-#include <ArduinoJson.h>
+// #include <FS.h>
+// #include <SPIFFS.h>
+// #include <ArduinoJson.h>
 
 #include <BlynkSimpleEsp32.h>
 
 
-SHTSensor sht;
+#define DEMO_PIN  18
+
+GPIOViewer gpioViewer;
+bool pinState = false;
+
+// SHTSensor sht;
 char ssid[] = WIFI_SSID;
 char pass[] = WIFI_PASS;
 
@@ -34,7 +43,13 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 void setup()
 {
   // Debug console
-  Serial.begin(9600);
+  Serial.begin(115200);
+
+  Serial.setDebugOutput(true);    // send ESP inbuilt log messages to Serial
+  
+  pinMode(DEMO_PIN, OUTPUT);
+
+  gpioViewer.setSamplingInterval(125);
 
   Wire.begin(21, 22);  // SDA, SCL pins
 
@@ -65,12 +80,18 @@ void setup()
   Serial.print("ESP32 IP Address: ");
   Serial.println(WiFi.localIP()); // Print IP address to Serial Monitor
 
-
   // Starting Blynk instance
-  Blynk.begin(BLYNK_AUTH_TOKEN, ssid, pass);
+  Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS);
+  // Starting GPIO Viewer instance
+  gpioViewer.begin();
 }
   
 void loop()
 {
   Blynk.run();
+  pinState = !pinState;
+  digitalWrite(DEMO_PIN, pinState);
+  log_i("Current pin state: %d", pinState);
+  delay(1000);
+  Serial.println("Hello World!");
 }

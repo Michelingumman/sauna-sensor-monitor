@@ -55,6 +55,7 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 /*************************************************************
   FUNCTION Declarations
 *************************************************************/
+void printLocalTime(void);
 float readTemperature(void);
 float readHumidity(void);
 
@@ -154,36 +155,63 @@ void setup()
   gpioViewer.begin();
 }
 
+
+
+
+
 /*************************************************************
   loop()
 *************************************************************/
-void loop()
-{
-  // Run Blynk tasks
+int i = 3;
+void loop() {
+  // Run Blynk tasks (must be called frequently)
   Blynk.run();
 
-  //1. get current temperature and humidity
+  // Get the current time in milliseconds
+  unsigned long currentMillis = millis();
+
+  // 1. Read current sensor values (temperature and humidity)
   float currentTemp = readTemperature();
-  float currentHum = readHumidity();
-
-  // 2) Check if a minute has passed => display time
-  checkAndPrintTime();  
-
-  // 3) Update sauna on/off logic
+  float currentHum  = readHumidity();
+  // 2. Check if a minute has passed to update the time display
+  if (currentMillis - lastTimePrint >= 60000UL) {
+    lastTimePrint = currentMillis;
+    i++;
+    currentTemp += i;
+    printLocalTime();
+    Serial.print("Temperature: " + String(currentTemp) + " °C");
+    Serial.println("Humidity: " + String(currentHum) + " %");
+    Serial.println();
+    Serial.println();
+    checkAndPrintTime();  
+  }
+  // 3. Update sauna on/off logic based on current temperature
   updateSaunaState(currentTemp);
-
-  // 4) Every 10s, log and draw the data
-  logAndDisplayData(currentTemp, currentHum);
-
-  // Optional small delay to keep loop stable
-  delay(100);
-
-
-
+  
+  // 4. Every 10 seconds, log sensor data and update the graph on the display
+  if (currentMillis - lastLogTime >= 10000UL) {
+    lastLogTime = currentMillis;
+    logAndDisplayData(currentTemp, currentHum);
+  }
+  
+  // A short delay to keep the loop stable
+  delay(200);
 }
 
 
 
+
+
+void printLocalTime(void) {
+    
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+  } else {
+    Serial.println(&timeinfo, "Current time: %A, %B %d %Y %H:%M:%S");
+  }
+
+}
 
 // For demonstration; replace with your actual temperature/humidity read calls
 float readTemperature() { 
@@ -203,9 +231,6 @@ float readHumidity() {
 
   return 50.0 + (rand() % 10) * 0.1; 
 }
-
-
-
 
 
 /*************************************************************

@@ -16,7 +16,7 @@
 #include <WiFiClient.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include <ElegantOTA.h>     // Change from ElegantOTA to AsyncElegantOTA
+#include <ElegantOTA.h>     // OTA update functionality
 
 #include <time.h>            // For NTP time synchronization
 
@@ -51,8 +51,6 @@ unsigned long ota_progress_millis = 0;
 // Timing settings
 const unsigned long WIFI_RETRY_INTERVAL = 60000;  // Try to reconnect WiFi every minute
 const unsigned long WIFI_CONNECT_TIMEOUT = 10000; // 10 seconds timeout for WiFi connection
-unsigned long lastTimePrint = 0;
-unsigned long lastLogTime = 0;
 
 // Sauna state variables
 bool saunaActive = false;          // True if sauna session is active
@@ -60,13 +58,6 @@ bool crossed20   = false;          // True if we've crossed 20°C
 unsigned long timeCrossed20 = 0;   // When we first crossed 20°C
 unsigned long saunaStartTime = 0;  // When the sauna session started
 float highestTempDuringSession = 0.0;
-
-// Logging and plotting variables
-#define LOG_INTERVAL 10000UL
-#define MAX_POINTS 128
-float tempLog[MAX_POINTS];
-float humLog[MAX_POINTS];
-int logIndex = 0;
 
 /*************************************************************
   FUNCTION Declarations
@@ -81,15 +72,13 @@ void check_wifi_connection();            // Check and attempt to reconnect WiFi
 void setup_web_server();                 // Setup web server routes
 
 // Display and sensor functions
-void draw();
+void draw(float temperature, float humidity);
 void printLocalTime(void);
 float readTemperature(void);
 float readHumidity(void);
 
 // Application logic
 void updateSaunaState(float currentTemp);
-void checkAndPrintTime(void);
-void logAndDisplayData(float temp, float hum);
 
 /*************************************************************
   OTA CALLBACK IMPLEMENTATIONS
@@ -158,28 +147,364 @@ void onOTAEnd(bool success) {
   Web Server Setup
 *************************************************************/
 void setup_web_server() {
-  // Default route for root web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String html = "<html><head><title>Sauna Sensor Monitor</title>";
+  // Root page with enhanced interface
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    String html = "<!DOCTYPE html><html><head>";
     html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
+    html += "<title>Sauna Sensor Monitor</title>";
+    html += "<script src='https://cdn.jsdelivr.net/npm/chart.js'></script>";
     html += "<style>";
-    html += "body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }";
-    html += "h1 { color: #333366; }";
+    html += "body { font-family: Arial, sans-serif; margin: 0; padding: 20px; text-align: center; background-color: #121212; color: #e0e0e0; }";
+    html += "h1 { color: #ffffff; margin-top: 30px; font-weight: 300; letter-spacing: 1px; font-size: 1.8rem; }";
     html += ".btn { background-color: #4CAF50; border: none; color: white; padding: 15px 32px; ";
-    html += "text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; }";
-    html += ".info { margin: 20px; padding: 10px; background-color: #e7f3fe; border-left: 6px solid #2196F3; }";
-    html += "</style></head><body>";
+    html += "text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 20px 2px; cursor: pointer; border-radius: 8px; transition: all 0.3s; }";
+    html += ".btn:hover { background-color: #3e8e41; transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.3); }";
+    html += ".info { margin: 20px 0; padding: 15px; background-color: #1e1e1e; border-left: 6px solid #4CAF50; text-align: left; border-radius: 4px; color: #e0e0e0; }";
+    html += ".data-container { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; margin: 30px 0; }";
+    html += ".data-card { background-color: #1e1e1e; border-radius: 12px; padding: 20px; width: 180px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); transition: transform 0.2s; }";
+    html += ".data-card:hover { transform: translateY(-5px); box-shadow: 0 6px 10px rgba(0,0,0,0.4); }";
+    
+    // Style each card differently
+    html += ".temp-card { border-top: 3px solid #ff6384; }";
+    html += ".humidity-card { border-top: 3px solid #36a2eb; }";
+    html += ".session-card { border-top: 3px solid #4CAF50; }";
+    
+    html += ".data-value { font-size: 32px; font-weight: bold; margin: 10px 0; color: #ffffff; }";
+    html += ".data-label { color: #9e9e9e; font-size: 14px; }";
+    html += ".chart-container { width: 100%; max-width: 800px; height: 400px; margin: 30px auto; padding: 20px; background-color: #1e1e1e; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }";
+    html += "strong { color: #4CAF50; }";
+    html += ".info p { margin: 8px 0; }";
+    html += ".footer { margin-top: 30px; font-size: 12px; color: #9e9e9e; }";
+    
+    // Mobile responsive adjustments
+    html += "@media (max-width: 768px) {";
+    html += "  body { padding: 10px; }";
+    html += "  h1 { font-size: 1.5rem; }";
+    html += "  .info { margin: 15px 0; padding: 10px; }";
+    html += "  .data-container { gap: 10px; margin: 15px 0; }";
+    html += "  .data-card { width: calc(50% - 25px); padding: 15px; }";
+    html += "  .data-value { font-size: 24px; }";
+    html += "  .chart-container { height: 300px; padding: 10px; margin: 15px auto; }";
+    html += "  .btn { padding: 12px 25px; font-size: 14px; }";
+    html += "}";
+    
+    // Extra small screens
+    html += "@media (max-width: 480px) {";
+    html += "  .data-container { flex-direction: column; align-items: center; }";
+    html += "  .data-card { width: 100%; max-width: 250px; }";
+    html += "  .chart-container { height: 250px; }";
+    html += "}";
+    
+    html += "</style>";
+    
+    // Add dark mode Chart.js config
+    html += "<script>";
+    html += "Chart.defaults.color = '#e0e0e0';";
+    html += "Chart.defaults.borderColor = '#303030';";
+    html += "</script>";
+    
+    html += "</head><body>";
     html += "<h1>Sauna Sensor Monitor</h1>";
+    
     html += "<div class='info'>";
-    html += "<p><strong>Device:</strong> ESP32</p>";
+    html += "<p><strong>Device:</strong> ESP32 (Sauna-Sensor)</p>";
     html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
     html += "</div>";
+    
+    // Data cards for current readings
+    html += "<div class='data-container'>";
+    
+    // Temperature card
+    html += "<div class='data-card temp-card'>";
+    html += "<div class='data-label'>Temperature</div>";
+    html += "<div class='data-value' id='temp-value'>--</div>";
+    html += "<div class='data-label'>°C</div>";
+    html += "</div>";
+    
+    // Humidity card
+    html += "<div class='data-card humidity-card'>";
+    html += "<div class='data-label'>Humidity</div>";
+    html += "<div class='data-value' id='humidity-value'>--</div>";
+    html += "<div class='data-label'>%</div>";
+    html += "</div>";
+    
+    // Session time card
+    html += "<div class='data-card session-card'>";
+    html += "<div class='data-label'>Session Time</div>";
+    html += "<div class='data-value' id='session-time'>--</div>";
+    html += "<div class='data-label'>minutes</div>";
+    html += "</div>";
+    
+    html += "</div>";
+    
+    // Graph container
+    html += "<div class='chart-container'>";
+    html += "<canvas id='sensorChart'></canvas>";
+    html += "</div>";
+    
     html += "<a href='/update' class='btn'>OTA Updates</a>";
+    
+    // JavaScript to fetch data and update the UI
+    html += "<script>";
+    html += "let chart;";
+    html += "function fetchData() {";
+    html += "  console.log('Fetching data from /data endpoint...');";
+    html += "  fetch('/data', { cache: 'no-store' })"; // Add no-store to prevent caching
+    html += "    .then(response => {";
+    html += "      console.log('Response status:', response.status);";
+    html += "      if (!response.ok) {";
+    html += "        throw new Error('Network response error: ' + response.status);";
+    html += "      }";
+    html += "      return response.text();"; // First get as text
+    html += "    })";
+    html += "    .then(text => {";
+    html += "      console.log('Raw response:', text);"; // Log the raw text
+    html += "      // Parse JSON manually to avoid potential issues";
+    html += "      try {";
+    html += "        return JSON.parse(text);";
+    html += "      } catch (e) {";
+    html += "        console.error('JSON parse error:', e, 'for text:', text);";
+    html += "        throw new Error('Failed to parse JSON response');";
+    html += "      }";
+    html += "    })";
+    html += "    .then(data => {";
+    html += "      console.log('Parsed data:', data);"; // Debug log
+    
+    html += "      // Get DOM elements once";
+    html += "      const tempElement = document.getElementById('temp-value');";
+    html += "      const humElement = document.getElementById('humidity-value');";
+    html += "      const sessionElement = document.getElementById('session-time');";
+    
+    html += "      // Check if elements exist";
+    html += "      if (!tempElement || !humElement || !sessionElement) {";
+    html += "        console.error('Could not find one or more DOM elements');";
+    html += "        return;";
+    html += "      }";
+    
+    html += "      // Update temperature";
+    html += "      if (data.temperature !== undefined) {";
+    html += "        try {";
+    html += "          const tempVal = Number(data.temperature);";
+    html += "          tempElement.textContent = tempVal.toFixed(1);";
+    html += "          console.log('Updated temperature to:', tempVal.toFixed(1));";
+    html += "        } catch (e) {";
+    html += "          console.error('Error setting temperature:', e);";
+    html += "          tempElement.textContent = 'Error';";
+    html += "        }";
+    html += "      }";
+    
+    html += "      // Update humidity";
+    html += "      if (data.humidity !== undefined) {";
+    html += "        try {";
+    html += "          const humVal = Number(data.humidity);";
+    html += "          humElement.textContent = Math.round(humVal);";
+    html += "          console.log('Updated humidity to:', Math.round(humVal));";
+    html += "        } catch (e) {";
+    html += "          console.error('Error setting humidity:', e);";
+    html += "          humElement.textContent = 'Error';";
+    html += "        }";
+    html += "      }";
+    
+    html += "      // Update session time";
+    html += "      if (data.sessionTime !== undefined) {";
+    html += "        try {";
+    html += "          sessionElement.textContent = data.sessionTime;";
+    html += "          console.log('Updated session time to:', data.sessionTime);";
+    html += "        } catch (e) {";
+    html += "          console.error('Error setting session time:', e);";
+    html += "          sessionElement.textContent = '0';";
+    html += "        }";
+    html += "      }";
+    
+    html += "      // Update chart if we have valid data";
+    html += "      if (data.tempHistory && data.humHistory && data.labels) {";
+    html += "        updateChart(data);";
+    html += "      }";
+    html += "    })";
+    html += "    .catch(error => {";
+    html += "      console.error('Fetch error:', error);";
+    html += "    });";
+    html += "}";
+    
+    html += "function updateChart(data) {";
+    html += "  if (!chart) {";
+    html += "    const ctx = document.getElementById('sensorChart').getContext('2d');";
+    html += "    chart = new Chart(ctx, {";
+    html += "      type: 'line',";
+    html += "      data: {";
+    html += "        labels: data.labels,";
+    html += "        datasets: [";
+    html += "          {";
+    html += "            label: 'Temperature (°C)',";
+    html += "            data: data.tempHistory,";
+    html += "            borderColor: '#ff6384',";
+    html += "            backgroundColor: 'rgba(255, 99, 132, 0.2)',";
+    html += "            borderWidth: 2,";
+    html += "            pointRadius: 3,";
+    html += "            tension: 0.3";
+    html += "          },";
+    html += "          {";
+    html += "            label: 'Humidity (%)',";
+    html += "            data: data.humHistory,";
+    html += "            borderColor: '#36a2eb',";
+    html += "            backgroundColor: 'rgba(54, 162, 235, 0.2)',";
+    html += "            borderWidth: 2,";
+    html += "            pointRadius: 3,";
+    html += "            tension: 0.3";
+    html += "          }";
+    html += "        ]";
+    html += "      },";
+    html += "      options: {";
+    html += "        responsive: true,";
+    html += "        maintainAspectRatio: false,";
+    html += "        plugins: {";
+    html += "          legend: {";
+    html += "            labels: {";
+    html += "              color: '#e0e0e0',";
+    html += "              font: {";
+    html += "                size: 12";
+    html += "              },";
+    html += "              boxWidth: 12";
+    html += "            },";
+    html += "            position: window.innerWidth < 768 ? 'bottom' : 'top'";
+    html += "          },";
+    html += "          tooltip: {";
+    html += "            mode: 'index',";
+    html += "            intersect: false,";
+    html += "            backgroundColor: 'rgba(0,0,0,0.7)'";
+    html += "          }";
+    html += "        },";
+    html += "        interaction: { mode: 'index', intersect: false },";
+    html += "        scales: {";
+    html += "          y: {";
+    html += "            beginAtZero: false,";
+    html += "            grid: {";
+    html += "              color: '#303030',";
+    html += "              display: window.innerWidth > 480";
+    html += "            },";
+    html += "            ticks: {";
+    html += "              color: '#e0e0e0',";
+    html += "              maxTicksLimit: window.innerWidth < 480 ? 5 : 10,";
+    html += "              font: {";
+    html += "                size: window.innerWidth < 480 ? 10 : 12";
+    html += "              }";
+    html += "            }";
+    html += "          },";
+    html += "          x: {";
+    html += "            grid: {";
+    html += "              color: '#303030',";
+    html += "              display: window.innerWidth > 480";
+    html += "            },";
+    html += "            ticks: {";
+    html += "              color: '#e0e0e0',";
+    html += "              maxRotation: 0,";
+    html += "              maxTicksLimit: window.innerWidth < 480 ? 5 : 10,";
+    html += "              font: {";
+    html += "                size: window.innerWidth < 480 ? 10 : 12";
+    html += "              }";
+    html += "            }";
+    html += "          }";
+    html += "        }";
+    html += "      }";
+    html += "    });";
+    html += "  } else {";
+    html += "    chart.data.labels = data.labels;";
+    html += "    chart.data.datasets[0].data = data.tempHistory;";
+    html += "    chart.data.datasets[1].data = data.humHistory;";
+    html += "    chart.update();";
+    html += "  }";
+    html += "}";
+    
+    html += "// Fetch initial data and setup refresh interval";
+    html += "fetchData();"; // Immediate first fetch
+    html += "console.log('Setting up refresh interval...');";
+    html += "const refreshInterval = setInterval(fetchData, 2000);"; // Refresh every 2 seconds
+    
+    // Add a document.readyState check to ensure DOM is fully loaded
+    html += "document.addEventListener('DOMContentLoaded', function() {";
+    html += "  console.log('DOM fully loaded, fetching initial data...');";
+    html += "  fetchData();";
+    html += "});";
+    html += "</script>";
+    
+    // Add footer
+    html += "<div class='footer'>Custom Built for Ingemar Josefsson &copy; </div>";
+    
     html += "</body></html>";
     request->send(200, "text/html", html);
   });
-  
+
+  // API endpoint to provide current data
+  server.on("/data", HTTP_GET, [](AsyncWebServerRequest *request){
+    // Log request details
+    Serial.printf("DATA API Request from %s\n", request->client()->remoteIP().toString().c_str());
+    
+    // Debug sensor readings to serial monitor
+    float temp = readTemperature();
+    float hum = readHumidity();
+    Serial.printf("API Request - Temperature: %.2f, Humidity: %.2f\n", temp, hum);
+    
+    // Create a JSON-formatted string with current data
+    String json = "{";
+    
+    // Add current temperature and humidity with explicit decimal points to ensure proper parsing
+    json += "\"temperature\":" + String(temp, 1);  // Force 1 decimal place
+    json += ",\"humidity\":" + String(int(hum));   // Round humidity to integer
+    
+    // Add sauna session time in minutes (if active)
+    unsigned long sessionMinutes = 0;
+    if (saunaActive && saunaStartTime > 0) {
+      sessionMinutes = (millis() - saunaStartTime) / 60000;
+    }
+    json += ",\"sessionTime\":" + String(sessionMinutes);
+    
+    // Create history arrays for the chart - last 10 readings
+    json += ",\"labels\":[";
+    for (int i = 0; i < 10; i++) {
+      if (i > 0) json += ",";
+      json += "\"" + String(i * 10) + "s ago\"";
+    }
+    json += "]";
+    
+    // Add temperature history with explicit decimal formatting
+    json += ",\"tempHistory\":[";
+    float baseTemp = temp;
+    for (int i = 0; i < 10; i++) {
+      if (i > 0) json += ",";
+      // Slight random variation for demo purposes
+      float historyTemp = baseTemp + random(-15, 15) / 10.0;
+      json += String(historyTemp, 1);  // Force 1 decimal place
+    }
+    json += "]";
+    
+    // Add humidity history as integers
+    json += ",\"humHistory\":[";
+    float baseHum = hum;
+    for (int i = 0; i < 10; i++) {
+      if (i > 0) json += ",";
+      // Slight random variation for demo purposes
+      int historyHum = int(baseHum + random(-10, 10) / 10.0);
+      json += String(historyHum);
+    }
+    json += "]";
+    
+    json += "}";
+    Serial.println("Sending JSON: " + json);
+    
+    // Add CORS headers to allow requests from any origin
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Access-Control-Allow-Origin", "*");
+    response->addHeader("Access-Control-Allow-Methods", "GET");
+    response->addHeader("Access-Control-Allow-Headers", "Content-Type");
+    response->addHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+    request->send(response);
+    
+    Serial.println("API response sent successfully");
+  });
+
+  // Setup ElegantOTA
   ElegantOTA.begin(&server);
+  
   // Start server
   server.begin();
   Serial.println("HTTP server started");
@@ -245,7 +570,7 @@ void setup()
     Serial.println(F("SSD1306 allocation failed"));
   }
   display.clearDisplay();
-  display.setTextSize(2);
+  display.setTextSize(1.5);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(10, 20);
   display.println("Starting...");
@@ -258,19 +583,19 @@ void setup()
 
   /***************** NTP Time Synchronization **************/
   if (wifi_connected) {
-    // Configure time using NTP servers without manual offsets
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    // Set timezone for Sweden (CET/CEST): CET is GMT+1 and CEST is GMT+2.
-    // DST starts on the last Sunday in March at 2:00 and ends on the last Sunday in October at 3:00.
-    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
-    tzset();
-    
-    Serial.println("Waiting for time synchronization...");
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-      Serial.println("Failed to obtain time");
-    } else {
-      Serial.println(&timeinfo, "Current time: %A, %B %d %Y %H:%M:%S");
+  // Configure time using NTP servers without manual offsets
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  // Set timezone for Sweden (CET/CEST): CET is GMT+1 and CEST is GMT+2.
+  // DST starts on the last Sunday in March at 2:00 and ends on the last Sunday in October at 3:00.
+  setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+  tzset();
+  
+  Serial.println("Waiting for time synchronization...");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+  } else {
+    Serial.println(&timeinfo, "Current time: %A, %B %d %Y %H:%M:%S");
     }
   }
 
@@ -281,51 +606,72 @@ void setup()
   }
 
   /***************** Display Initial UI *******************/
-  draw();
+  float initialTemp = readTemperature();
+  float initialHum = readHumidity();
+  draw(initialTemp, initialHum);
   
   Serial.println("Setup complete!");
 }
 
 /*************************************************************
-  Main Loop
+  Main Loop - Optimized & Clean
 *************************************************************/
 void loop() {
-  // Check and reconnect WiFi periodically if disconnected
+  static unsigned long lastDisplayUpdate = 0;
+  static unsigned long lastSerialOutput = 0;
   static unsigned long lastWifiCheck = 0;
-  if (millis() - last_wifi_attempt > WIFI_RETRY_INTERVAL) {
+  unsigned long currentMillis = millis();
+  
+  // Process OTA updates if WiFi connected
+  if (wifi_connected) {
+    ElegantOTA.loop();
+  }
+  
+  // Check and reconnect WiFi periodically if needed
+  if (currentMillis - lastWifiCheck >= WIFI_RETRY_INTERVAL) {
+    lastWifiCheck = currentMillis;
     check_wifi_connection();
   }
   
-  // Get the current time in milliseconds
-  unsigned long currentMillis = millis();
-
-  // 1. Read current sensor values (temperature and humidity)
-  float currentTemp = readTemperature();
-  float currentHum = readHumidity();
-  
-  // 2. Check if a minute has passed to update the time display
-  static unsigned long lastTimePrint = 0;
-  if (currentMillis - lastTimePrint >= 60000UL) {
-    lastTimePrint = currentMillis;
-    printLocalTime();
-    Serial.print("Temperature: " + String(currentTemp) + " °C");
-    Serial.println("Humidity: " + String(currentHum) + " %");
-    Serial.println();
-    checkAndPrintTime();  
+  // Read sensor data and update display
+  if (currentMillis - lastDisplayUpdate >= 2000) {
+    float currentTemp = readTemperature();
+    float currentHum = readHumidity();
+    
+    // Update sauna state logic based on temperature
+    updateSaunaState(currentTemp);
+    
+    // Update display
+    lastDisplayUpdate = currentMillis;
+    draw(currentTemp, currentHum);
+    
+    // Print minimal status info to serial (once per minute)
+    if (currentMillis - lastSerialOutput >= 60000) {
+      lastSerialOutput = currentMillis;
+      
+      // Get current time
+      struct tm timeinfo;
+      if (getLocalTime(&timeinfo)) {
+        char timeStr[20];
+        strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+        
+        // Print status in a clean, concise format
+        Serial.printf("[%s] Temp: %.1f°C | Humidity: %d%% | WiFi: %s\n", 
+                     timeStr, 
+                     currentTemp, 
+                     (int)currentHum,
+                     wifi_connected ? "Connected" : "Disconnected");
+                     
+        if (saunaActive) {
+          unsigned long sessionMinutes = (millis() - saunaStartTime) / 60000;
+          Serial.printf("        Sauna active for %lu minutes\n", sessionMinutes);
+        }
+      }
+    }
   }
   
-  // 3. Update sauna on/off logic based on current temperature
-  updateSaunaState(currentTemp);
-  
-  // 4. Every 10 seconds, log sensor data and update the graph on the display
-  static unsigned long lastLogTime = 0;
-  if (currentMillis - lastLogTime >= 10000UL) {
-    lastLogTime = currentMillis;
-    logAndDisplayData(currentTemp, currentHum);
-  }
-  
-  // A short delay to keep the loop stable
-  delay(200);
+  // Small delay to prevent CPU hogging
+  delay(25);
 }
 
 void printLocalTime(void) {
@@ -339,58 +685,39 @@ void printLocalTime(void) {
 
 }
 
-// For demonstration; replace with your actual temperature/humidity read calls
+// Implement actual temperature reading from SHT2x sensor
 float readTemperature() { 
-  // TODO: Replace with sensor code, e.g., sht.getTemperature()
-  // sht.read();
-  // sht.getTemperature();
+  // Read from SHT2x sensor
+  sht.read();
+  float temp = sht.getTemperature();
   
-  return 25.0 + (rand() % 10) * 0.1; 
-}
-
-
-// For demonstration; replace with your actual temperature/humidity read calls
-float readHumidity() {
-  // TODO: Replace with sensor code, e.g., sht.getHumidity()
-  // sht.read();
-  // sht.getHumidity();
-
-  return 50.0 + (rand() % 10) * 0.1; 
-}
-
-
-/*************************************************************
-  checkAndPrintTime()
-  - Once per minute, prints local time in "Monday 01-13:00" style
-*************************************************************/
-void checkAndPrintTime(void) {
-  unsigned long now = millis();
-  if (now - lastTimePrint >= 60000) {
-    lastTimePrint = now;
-
-    struct tm timeinfo;
-    if (getLocalTime(&timeinfo)) {
-      // Format: DayOfWeek DayOfMonth-Hour:Minute
-      // E.g., "Monday 01-13:00"
-      // %A = Full weekday name, %d = day of month, %H = hour (24h), %M = minute
-      char timeStr[32];
-      strftime(timeStr, sizeof(timeStr), "%A %d-%H:%M", &timeinfo);
-
-      // Print to OLED
-      display.setTextColor(SSD1306_WHITE);
-      display.setTextSize(1);       // Adjust text size as needed
-      display.setCursor(0, 0);      // Position at top-left
-      display.fillRect(0, 0, 128, 10, SSD1306_BLACK); // Clear just the top line
-      display.setTextWrap(false);
-      display.print(timeStr);
-      display.display();
-      Serial.println(timeStr);
-    }
+  // Check if reading is valid (not NaN or infinite)
+  if (isnan(temp) || isinf(temp)) {
+    Serial.println("Error reading temperature from sensor!");
+    // Return a fallback value
+    return 25.0;
   }
+  
+  // Serial.printf("Temperature read: %.2f°C\n", temp);
+  return temp;
 }
 
-
-
+// Implement actual humidity reading from SHT2x sensor
+float readHumidity() {
+  // Read from SHT2x sensor
+  sht.read();
+  float humidity = sht.getHumidity();
+  
+  // Check if reading is valid (not NaN or infinite)
+  if (isnan(humidity) || isinf(humidity) || humidity < 0 || humidity > 100) {
+    Serial.println("Error reading humidity from sensor!");
+    // Return a fallback value
+    return 50.0;
+  }
+  
+  // Serial.printf("Humidity read: %.2f%%\n", humidity);
+  return humidity;
+}
 
 /*************************************************************
   updateSaunaState(currentTemp)
@@ -441,96 +768,53 @@ void updateSaunaState(float currentTemp) {
   }
 }
 
-
-
-
-/*************************************************************
-  logAndDisplayData(temp, hum)
-  - Every 10s: store temp & humidity
-  - Then draw them on the OLED (temp = solid line, hum = dotted line)
-*************************************************************/
-void logAndDisplayData(float temp, float hum) {
-  unsigned long now = millis();
-  if (now - lastLogTime >= LOG_INTERVAL) {
-    lastLogTime = now;
-
-    // 1) Store the sensor data in arrays
-    tempLog[logIndex] = temp;
-    humLog[logIndex]  = hum;
-    logIndex = (logIndex + 1) % MAX_POINTS;
-
-    // 2) Simple example: draw graph
-    // Clear the display area for the graph
-    display.fillRect(0, 16, SCREEN_WIDTH, SCREEN_HEIGHT - 16, SSD1306_BLACK);
-    
-    // We'll scale the data to fit the display. Adjust as needed.
-    // For example, assume 0–100°C and 0–100% humidity for demonstration.
-    // Each data point maps to an x-pixel; y is reversed on many displays.
-    for (int i = 0; i < MAX_POINTS - 1; i++) {
-      int idx1 = (logIndex + i) % MAX_POINTS;
-      int idx2 = (logIndex + i + 1) % MAX_POINTS;
-      
-      // Temperature (solid line)
-      int x1t = i;
-      int y1t = map((int)tempLog[idx1], 0, 100, SCREEN_HEIGHT - 1, 16);
-      int x2t = i + 1;
-      int y2t = map((int)tempLog[idx2], 0, 100, SCREEN_HEIGHT - 1, 16);
-      display.drawLine(x1t, y1t, x2t, y2t, SSD1306_WHITE);
-
-      // Humidity (dotted line): we draw a dot at each data point
-      int y1h = map((int)humLog[idx1], 0, 100, SCREEN_HEIGHT - 1, 16);
-      display.drawPixel(x1t, y1h, SSD1306_WHITE);
-    }
-
-    // Optionally print the latest values (temp & hum) as text
-    display.setTextSize(1);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 54); // near bottom
-    display.print("T:");
-    display.print(temp);
-    display.print("C  H:");
-    display.print(hum);
-    display.print("%");
-
-    // Push changes to the display
-    display.display();
-
-    Serial.print("Temp: ");
-    Serial.print(temp);
-    Serial.print("°C, Humidity: ");
-    Serial.print(hum);
-    Serial.println("%");
-    
+void draw(float temperature, float humidity) {
+  display.clearDisplay();
+  
+  // Draw border
+  display.drawRect(0, 0, display.width(), display.height(), SSD1306_WHITE);
+  
+  // Show WiFi status icon in top right corner
+  if (!wifi_connected) {
+    display.drawBitmap(display.width() - 18, 2, NO_NETWORK_ICON, 16, 16, SSD1306_WHITE);
   }
-}
-
-
-
-
-
-void draw(void) {
-    display.clearDisplay();
-
-    // Layer 1
-    display.drawBitmap(76, 70, image_Layer_1_bits, 153, 239, 1);
-
-    // weather_humidity_white
-    display.drawBitmap(113, 19, image_hum, 11, 16, 1);
-
-    // weather_temperature
-    display.drawBitmap(112, 45, image_temp, 16, 16, 1);
-
-    // Layer 5
-    display.drawRect(0, 9, 111, 55, 1);
-
-    // Layer 6 (copy)
-    display.setTextColor(1);
-    display.setTextWrap(false);
-    display.setCursor(1, 0);
-    display.print("Session: 00:10");
-
-    // Layer 8
-    display.drawBitmap(2, 23, image_Layer_8_bits, 107, 34, 1);
+  
+  // Temperature section - moved higher up
+  display.drawBitmap(8, 6, TEMP_ICON, 16, 16, SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(28, 6);
+  display.print(temperature, 1);
+  display.setTextSize(2);
+  display.print(" C");
+  
+  // Separator line
+  display.drawLine(0, 28, display.width(), 28, SSD1306_WHITE);
+  
+  // Humidity section - moved higher up
+  display.drawBitmap(8, 34, DROP_ICON, 16, 16, SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(28, 34);
+  display.print(int(humidity));
+  display.print(" %");
+  
+  // Show sauna session info in a dedicated bottom area
+  if (saunaActive) {
+    // Bottom status bar with enough clearance from humidity reading
+    display.drawLine(0, 54, display.width(), 54, SSD1306_WHITE);
+    
+    display.setTextSize(1);
+    display.setCursor(3, 56);
+    display.print("SAUNA ON ");
+    
+    // Calculate session time
+    unsigned long sessionMin = (millis() - saunaStartTime) / 60000;
+    unsigned long sessionSec = ((millis() - saunaStartTime) % 60000) / 1000;
+    
+    display.print(sessionMin);
+    display.print(":");
+    if (sessionSec < 10) display.print("0");
+    display.print(sessionSec);
+  }
 
     display.display();
 }

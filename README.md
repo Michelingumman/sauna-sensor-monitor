@@ -9,17 +9,6 @@ A smart monitoring system that tracks temperature and humidity in saunas, detect
 ![Sauna Monitor Display](https://github.com/user-attachments/assets/5eeba7a8-1e52-4ab0-8149-8ff183ecbd70)
 ![Sauna Monitor Graph](https://github.com/user-attachments/assets/7d22766a-37de-4d0f-9adf-860cdadb0d28)
 
-## 📋 Table of Contents
-
-- [Overview](#overview)
-- [Features](#features)
-- [Hardware Requirements](#hardware-requirements)
-- [Software Requirements](#software-requirements)
-- [Installation & Setup](#installation--setup)
-- [How It Works](#how-it-works)
-- [Configuration](#configuration)
-- [License](#license)
-
 ## 🔍 Overview
 
 This ESP32-based system provides comprehensive monitoring for saunas, automatically detecting when sessions begin and end based on temperature changes. The device displays real-time data on an OLED screen and can optionally connect to Blynk for remote monitoring.

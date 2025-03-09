@@ -6,8 +6,7 @@
 
 A smart monitoring system that tracks temperature and humidity in saunas, detects sessions automatically, and provides real-time visualization through an OLED display and optional web interface.
 
-![Sauna Monitor Display](https://github.com/user-attachments/assets/5eeba7a8-1e52-4ab0-8149-8ff183ecbd70)
-![Sauna Monitor Graph](https://github.com/user-attachments/assets/7d22766a-37de-4d0f-9adf-860cdadb0d28)
+![Custom PCB Board](https://github.com/user-attachments/assets/7d22766a-37de-4d0f-9adf-860cdadb0d28)
 
 ## 🔍 Overview
 
@@ -115,6 +114,7 @@ Using PlatformIO or Arduino IDE, compile and upload the code to your ESP32 board
 - Displays real-time temperature and humidity
 - Shows session status and historical data
 - Enables OTA firmware updates
+![Sauna Monitor Display](https://github.com/user-attachments/assets/5eeba7a8-1e52-4ab0-8149-8ff183ecbd70)
 
 ## 🔧 Configuration
 

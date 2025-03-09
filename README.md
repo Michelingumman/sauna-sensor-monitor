@@ -4,8 +4,9 @@ This project monitors temperature and humidity in a sauna, logs data, and displa
 information on an SSD1306 OLED. It uses NTP for time synchronization, 
 includes logic to detect when the sauna turns on/off, and optionally integrates with Blynk.
 
+![image](https://github.com/user-attachments/assets/5eeba7a8-1e52-4ab0-8149-8ff183ecbd70)
+![image](https://github.com/user-attachments/assets/7d22766a-37de-4d0f-9adf-860cdadb0d28)
 
-<img src="https://github.com/user-attachments/assets/bb26ba26-0b00-46c6-a9fa-7dae553f842b" style="width:50%;"/>
 
 --------
 

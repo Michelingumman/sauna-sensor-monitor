@@ -2,8 +2,10 @@
   Includes
 *************************************************************/
 #include <Arduino.h>
+#include <gpio_viewer.h>     // For GPIO monitoring
 #include "images.h"         // For OLED display images
 #include "secrets.h"         // Contains WIFI_SSID, WIFI_PASS, BLYNK_AUTH_TOKEN
+
 
 #include <SPI.h>
 #include <Wire.h>
@@ -14,11 +16,10 @@
 
 #include <WiFi.h>
 #include <WiFiClient.h>
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-#include <ElegantOTA.h>     // Change from ElegantOTA to AsyncElegantOTA
-
 #include <time.h>            // For NTP time synchronization
+
+
+#include <BlynkSimpleEsp32.h> // Blynk library for ESP32
 
 /*************************************************************
   Definitions
@@ -30,216 +31,84 @@
 #define SCREEN_HEIGHT 64        // OLED display height, in pixels
 #define OLED_RESET    -1        // Reset pin # (or -1 if sharing Arduino reset pin)
 #define SCREEN_ADDRESS 0x3C     // I2C address for OLED display
-#define SDA_PIN 6              // OLED SDA pin
-#define SCL_PIN 7              // OLED SCL pin
+#define OLED_SDA 6              // OLED SDA pin
+#define OLED_SCL 7              // OLED SCL pin
+
+#define SENSOR_SDA 6
+#define SENSOR_SCL 7
 
 /*************************************************************
   Global Objects
 *************************************************************/
-SHT2x sht;                      // For SHT temperature/humidity sensors
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
-AsyncWebServer server(80);      // Web server for OTA updates and file access
-
-// State variables
+GPIOViewer gpioViewer;          // For GPIO state visualization
+SHT2x sht;                  // For SHT temperature/humidity sensors (not used yet)
 bool pinState = false;          // Tracks toggling state
-bool wifi_connected = false;
-unsigned long last_wifi_attempt = 0;
 
-// OTA update variables
-unsigned long ota_progress_millis = 0;
 
-// Timing settings
-const unsigned long WIFI_RETRY_INTERVAL = 60000;  // Try to reconnect WiFi every minute
-const unsigned long WIFI_CONNECT_TIMEOUT = 10000; // 10 seconds timeout for WiFi connection
-unsigned long lastTimePrint = 0;
-unsigned long lastLogTime = 0;
 
-// Sauna state variables
-bool saunaActive = false;          // True if sauna session is active
-bool crossed20   = false;          // True if we've crossed 20°C
-unsigned long timeCrossed20 = 0;   // When we first crossed 20°C
-unsigned long saunaStartTime = 0;  // When the sauna session started
-float highestTempDuringSession = 0.0;
+// Create an OLED display object
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-// Logging and plotting variables
-#define LOG_INTERVAL 10000UL
-#define MAX_POINTS 128
-float tempLog[MAX_POINTS];
-float humLog[MAX_POINTS];
-int logIndex = 0;
+
+
 
 /*************************************************************
   FUNCTION Declarations
 *************************************************************/
-// OTA callback functions
-void onOTAStart();
-void onOTAProgress(size_t current, size_t final);
-void onOTAEnd(bool success);
-
-// WiFi and server functions
-void check_wifi_connection();            // Check and attempt to reconnect WiFi
-void setup_web_server();                 // Setup web server routes
-
-// Display and sensor functions
-void draw();
 void printLocalTime(void);
 float readTemperature(void);
 float readHumidity(void);
 
-// Application logic
 void updateSaunaState(float currentTemp);
 void checkAndPrintTime(void);
 void logAndDisplayData(float temp, float hum);
 
+
+
+
 /*************************************************************
-  OTA CALLBACK IMPLEMENTATIONS
+  VARIABLE Declarations
 *************************************************************/
-/**
- * Called when OTA update begins
- */
-void onOTAStart() {
-  Serial.println("OTA update started!");
-  // Show update status on display
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("OTA Update Started");
-  display.display();
-}
+// -- For once-per-minute time display --
+unsigned long lastTimePrint = 0;
 
-/**
- * Called periodically during OTA update process
- */
-void onOTAProgress(size_t current, size_t final) {
-  // Log progress every 1 second
-  if (millis() - ota_progress_millis > 1000) {
-    ota_progress_millis = millis();
-    Serial.printf("OTA Progress: %u of %u bytes (%.1f%%)\n", 
-                 current, final, (current * 100.0) / final);
-    
-    // Update progress on display
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println("OTA Update Progress:");
-    display.printf("%.1f%%\n", (current * 100.0) / final);
-    
-    // Draw progress bar
-    int barWidth = (current * 100) / final;
-    display.drawRect(14, 30, 100, 10, SSD1306_WHITE);
-    display.fillRect(14, 30, barWidth, 10, SSD1306_WHITE);
-    display.display();
-  }
-}
+// -- For sauna logic --
+bool saunaActive = false;          // True if sauna session is active
+bool crossed20   = false;          // True if we’ve crossed 20°C
+unsigned long timeCrossed20 = 0;   // When we first crossed 20°C
+unsigned long saunaStartTime = 0;  // When the sauna session started
+float highestTempDuringSession = 0.0;
 
-/**
- * Called when OTA update completes
- */
-void onOTAEnd(bool success) {
-  if (success) {
-    Serial.println("OTA update completed successfully!");
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println("OTA Update Complete!");
-    display.println("Rebooting...");
-    display.display();
-  } else {
-    Serial.println("Error during OTA update!");
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setCursor(0, 0);
-    display.println("OTA Update Failed!");
-    display.display();
-  }
-}
+// -- For 10-second logging & plotting --
+#define LOG_INTERVAL 10000UL
+unsigned long lastLogTime = 0;
+
+// Example arrays for storing sensor data (128 points max)
+#define MAX_POINTS 128
+float tempLog[MAX_POINTS];
+float humLog[MAX_POINTS];
+int   logIndex = 0;
+
+
 
 /*************************************************************
-  Web Server Setup
-*************************************************************/
-void setup_web_server() {
-  // Default route for root web page
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    String html = "<html><head><title>Sauna Sensor Monitor</title>";
-    html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
-    html += "<style>";
-    html += "body { font-family: Arial, sans-serif; margin: 20px; text-align: center; }";
-    html += "h1 { color: #333366; }";
-    html += ".btn { background-color: #4CAF50; border: none; color: white; padding: 15px 32px; ";
-    html += "text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin: 4px 2px; cursor: pointer; border-radius: 8px; }";
-    html += ".info { margin: 20px; padding: 10px; background-color: #e7f3fe; border-left: 6px solid #2196F3; }";
-    html += "</style></head><body>";
-    html += "<h1>Sauna Sensor Monitor</h1>";
-    html += "<div class='info'>";
-    html += "<p><strong>Device:</strong> ESP32</p>";
-    html += "<p><strong>IP Address:</strong> " + WiFi.localIP().toString() + "</p>";
-    html += "</div>";
-    html += "<a href='/update' class='btn'>OTA Updates</a>";
-    html += "</body></html>";
-    request->send(200, "text/html", html);
-  });
-  
-  ElegantOTA.begin(&server);
-  // Start server
-  server.begin();
-  Serial.println("HTTP server started");
-}
-
-/*************************************************************
-  WiFi Connection Functions
-*************************************************************/
-void check_wifi_connection() {
-  
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.print("Attempting to connect to WiFi... ");
-    
-    // Make sure we're in station mode
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-    
-    // Wait up to 10 seconds for connection
-    unsigned long startAttempt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < WIFI_CONNECT_TIMEOUT) {
-      delay(500);
-      Serial.print(".");
-    }
-    
-    if (WiFi.status() == WL_CONNECTED) {
-      wifi_connected = true;
-      Serial.println("Connected!");
-      Serial.print("IP address: ");
-      Serial.println(WiFi.localIP());
-      
-    } else {
-      wifi_connected = false;
-      Serial.println("Failed. Will retry later.");
-      WiFi.disconnect(true);
-    }
-  } else {
-    wifi_connected = true;
-  }
-}
-
-/*************************************************************
-  Setup
+  setup()
 *************************************************************/
 void setup()
 {
   /***************** Serial Debug Setup ********************/
   Serial.begin(9600);
+  Serial.setDebugOutput(true);    // Enable ESP32 internal debug output
 
-  Serial.println("\n=== Battery Management System ===");
-  Serial.println("Initializing...");
+  /***************** GPIO Viewer Setup *********************/
+  gpioViewer.setSamplingInterval(125);
 
   /***************** I2C Setup *****************************/
-  Wire.begin(SDA_PIN, SCL_PIN);  // SDA, SCL
-
-
-  /***************** OLED Display Initialization ***********/
+  // Use custom SDA and SCL pins; adjust if necessary for your board
+  Wire.begin(OLED_SDA, OLED_SCL);  // SDA, SCL
   sht.begin();
   Serial.print(uint8_t(sht.getStatus()), HEX);
   Serial.println();
-  
   /***************** OLED Display Initialization ***********/
   if (!display.begin(SSD1306_SWITCHCAPVCC, SCREEN_ADDRESS)) {
     Serial.println(F("SSD1306 allocation failed"));
@@ -252,81 +121,88 @@ void setup()
   display.display();  // Update the display
 
   /***************** WiFi Connection *************************/
-  WiFi.setHostname("Sauna-Sensor");  // Set a custom hostname for the device
-  check_wifi_connection();
-
+  WiFi.setHostname("SaunaSensor");  // Set a custom hostname for the device
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nConnected to WiFi");
+  Serial.print("ESP32 IP Address: ");
+  Serial.println(WiFi.localIP());
 
   /***************** NTP Time Synchronization **************/
-  if (wifi_connected) {
-    // Configure time using NTP servers without manual offsets
-    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-    // Set timezone for Sweden (CET/CEST): CET is GMT+1 and CEST is GMT+2.
-    // DST starts on the last Sunday in March at 2:00 and ends on the last Sunday in October at 3:00.
-    setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
-    tzset();
-    
-    Serial.println("Waiting for time synchronization...");
-    struct tm timeinfo;
-    if (!getLocalTime(&timeinfo)) {
-      Serial.println("Failed to obtain time");
-    } else {
-      Serial.println(&timeinfo, "Current time: %A, %B %d %Y %H:%M:%S");
-    }
-  }
-
-  /***************** Web Server & OTA Setup ***************/
-  if (wifi_connected) {
-    setup_web_server();
-    Serial.println("OTA updates initialized");
-  }
-
-  /***************** Display Initial UI *******************/
-  draw();
+  // Configure time using NTP servers without manual offsets
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+  // Set timezone for Sweden (CET/CEST): CET is GMT+1 and CEST is GMT+2.
+  // DST starts on the last Sunday in March at 2:00 and ends on the last Sunday in October at 3:00.
+  setenv("TZ", "CET-1CEST,M3.5.0/2,M10.5.0/3", 1);
+  tzset();
   
-  Serial.println("Setup complete!");
+  Serial.println("Waiting for time synchronization...");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+  } else {
+    Serial.println(&timeinfo, "Current time: %A, %B %d %Y %H:%M:%S");
+  }
+
+  /***************** Blynk Initialization ******************/
+  // Blynk.begin(BLYNK_AUTH_TOKEN, WIFI_SSID, WIFI_PASS);
+
+  /***************** GPIO Viewer Initialization ************/
+  gpioViewer.begin();
 }
 
+
+
+
+
 /*************************************************************
-  Main Loop
+  loop()
 *************************************************************/
+int i = 3;
 void loop() {
-  // Check and reconnect WiFi periodically if disconnected
-  static unsigned long lastWifiCheck = 0;
-  if (millis() - last_wifi_attempt > WIFI_RETRY_INTERVAL) {
-    check_wifi_connection();
-  }
-  
+  // Run Blynk tasks (must be called frequently)
+  // Blynk.run();
+
   // Get the current time in milliseconds
   unsigned long currentMillis = millis();
 
   // 1. Read current sensor values (temperature and humidity)
   float currentTemp = readTemperature();
-  float currentHum = readHumidity();
-  
+  float currentHum  = readHumidity();
   // 2. Check if a minute has passed to update the time display
-  static unsigned long lastTimePrint = 0;
   if (currentMillis - lastTimePrint >= 60000UL) {
     lastTimePrint = currentMillis;
+    i++;
+    currentTemp += i;
     printLocalTime();
     Serial.print("Temperature: " + String(currentTemp) + " °C");
     Serial.println("Humidity: " + String(currentHum) + " %");
     Serial.println();
+    Serial.println();
     checkAndPrintTime();  
   }
-  
   // 3. Update sauna on/off logic based on current temperature
   updateSaunaState(currentTemp);
   
   // 4. Every 10 seconds, log sensor data and update the graph on the display
-  static unsigned long lastLogTime = 0;
   if (currentMillis - lastLogTime >= 10000UL) {
     lastLogTime = currentMillis;
     logAndDisplayData(currentTemp, currentHum);
   }
   
+
+
   // A short delay to keep the loop stable
   delay(200);
 }
+
+
+
+
 
 void printLocalTime(void) {
     
